@@ -109,10 +109,16 @@
 <section>
   <h2>4. Test dell'esposizione automatica</h2>
   <p class="muted" style="margin-top:0">
-    Appoggia l'iPhone, con la fotocamera frontale a contatto, al centro dello schermo del PC che mostra
-    <b>patch.html</b>. Per ogni patch scrivi un'etichetta e premi «Registra». Se la fotocamera compensa
-    automaticamente, i valori di grigi diversi risulteranno quasi uguali tra loro.
+    Sul PC apri <b>patch.html</b> a schermo intero. Poi:
   </p>
+  <ol class="muted" style="margin:0 0 12px;padding-left:20px">
+    <li>Metti il PC sul <b>bianco</b> e blocca il bilanciamento del bianco (pulsante qui sotto).</li>
+    <li>Registra le patch una alla volta, con le frecce del PC: nero, grigi 10-90%, bianco, rosso, verde, blu.</li>
+    <li>Etichette esatte («Nero», «Bianco», «Grigio 30%»…) servono per calcolare i rapporti.</li>
+  </ol>
+  <div class="row" style="margin-bottom:12px">
+    <button id="wblock" disabled>Blocca bilanciamento bianco (sul bianco)</button>
+  </div>
   <div class="row">
     <input id="label" type="text" placeholder="Etichetta (es. grigio 50%)" aria-label="Etichetta">
   </div>
@@ -127,20 +133,25 @@
     <button id="snap" class="primary" disabled>Registra con ritardo</button>
   </div>
   <p class="muted" style="margin:8px 0 0;font-size:.9rem">
-    Dopo il tap senti un bip al secondo, poi un bip lungo quando parte la misura (1 secondo di media). Un bip doppio conferma che la misura è registrata. Alza il volume e non attivare il silenzioso.
+    Dopo il tap lo schermo dell'iPhone diventa nero, così non illumina la fotocamera. Senti un bip al secondo, poi un bip lungo quando parte la misura (1 secondo di media) e un doppio bip quando è registrata. Alza il volume e non attivare il silenzioso. Per un risultato migliore abbassa la luminosità dell'iPhone.
   </p>
   <p id="snapStatus" class="warn" style="margin:8px 0 0;min-height:1.4em"></p>
   <div class="scroll" style="margin-top:10px">
     <table>
-      <thead><tr><th>Etichetta</th><th>R</th><th>G</th><th>B</th><th>σ</th></tr></thead>
+      <thead><tr><th>Etichetta</th><th>R</th><th>G</th><th>B</th><th>σ</th><th>R/G</th><th>B/G</th></tr></thead>
       <tbody id="log"></tbody>
     </table>
   </div>
+  <p class="muted" style="margin:8px 0 0;font-size:.85rem">
+    R/G e B/G sono calcolati sui valori lineari, meno il nero, e sono relativi al bianco: 1,00 significa la stessa tinta del bianco. Compaiono solo per «Grigio…» e «Bianco». «saturo» indica un canale ≥ 250.
+  </p>
   <div class="row" style="margin-top:10px">
     <button id="copy" disabled>Copia come CSV</button>
     <button id="clear" disabled>Svuota</button>
   </div>
 </section>
+
+<div id="blackout" hidden style="position:fixed;inset:0;background:#000;z-index:100"></div>
 
 <script>
 (function () {
@@ -174,7 +185,7 @@
     running = true;
     try { if (navigator.wakeLock) navigator.wakeLock.request("screen").catch(function () {}); } catch (e) {}
     setMsg("Fotocamera attiva: " + (track.label || "frontale"), "ok");
-    $("start").disabled = true; $("stop").disabled = false; $("lock").disabled = false; $("snap").disabled = false;
+    $("start").disabled = true; $("stop").disabled = false; $("lock").disabled = false; $("snap").disabled = false; $("wblock").disabled = false; if (!$("label").value) $("label").value = rows.length ? nextLabel(rows[rows.length-1].label) : "Bianco";
     renderCaps();
     requestAnimationFrame(loop);
   });
@@ -183,7 +194,7 @@
     running = false;
     if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
     video.srcObject = null; stream = null; track = null;
-    $("start").disabled = false; $("stop").disabled = true; $("lock").disabled = true; $("snap").disabled = true;
+    $("start").disabled = false; $("stop").disabled = true; $("lock").disabled = true; $("snap").disabled = true; $("wblock").disabled = true;
     setMsg("Fotocamera ferma.");
   });
 
@@ -312,10 +323,38 @@
   }
 
   /* ---------- Registro misure ---------- */
+  var ORDER = ["Nero","Grigio 10%","Grigio 20%","Grigio 30%","Grigio 40%","Grigio 50%","Grigio 60%","Grigio 70%","Grigio 80%","Grigio 90%","Bianco","Rosso","Verde","Blu","Ciano","Magenta","Giallo"];
+  function nextLabel(cur) {
+    var c = cur.trim().toLowerCase();
+    for (var i = 0; i < ORDER.length - 1; i++) if (ORDER[i].toLowerCase() === c) return ORDER[i + 1];
+    return "";
+  }
+  function lin(v) { v = v / 255; return v <= 0.04045 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4); }
+  function findRow(name) {
+    for (var i = rows.length - 1; i >= 0; i--) if (rows[i].label.trim().toLowerCase() === name) return rows[i];
+    return null;
+  }
+  function derive() {
+    var blk = findRow("nero"), wht = findRow("bianco");
+    function net(r) {
+      var c = [lin(r.r), lin(r.g), lin(r.b)];
+      if (blk) c = [c[0] - lin(blk.r), c[1] - lin(blk.g), c[2] - lin(blk.b)];
+      return c.map(function (x) { return Math.max(x, 1e-4); });
+    }
+    var wn = wht ? net(wht) : null;
+    var wrg = wn ? wn[0] / wn[1] : 1, wbg = wn ? wn[2] / wn[1] : 1;
+    return rows.map(function (r) {
+      var n = net(r), grey = /^(grigio|bianco)/i.test(r.label.trim()) && n[1] > 0.003;
+      return { label: r.label, r: r.r, g: r.g, b: r.b, sd: r.sd,
+        rg: grey ? (n[0] / n[1]) / wrg : null, bg: grey ? (n[2] / n[1]) / wbg : null,
+        sat: Math.max(r.r, r.g, r.b) >= 250 };
+    });
+  }
+  function f2(v) { return v === null ? "–" : v.toFixed(2); }
   function renderLog() {
-    $("log").innerHTML = rows.map(function (r) {
-      return "<tr><td>" + esc(r.label) + '</td><td class="num">' + r.r.toFixed(1) + '</td><td class="num">' + r.g.toFixed(1) +
-        '</td><td class="num">' + r.b.toFixed(1) + '</td><td class="num">' + r.sd.toFixed(2) + "</td></tr>";
+    $("log").innerHTML = derive().map(function (r) {
+      return "<tr><td>" + esc(r.label) + (r.sat ? ' <span class="warn">saturo</span>' : "") + '</td><td class="num">' + r.r.toFixed(1) + '</td><td class="num">' + r.g.toFixed(1) +
+        '</td><td class="num">' + r.b.toFixed(1) + '</td><td class="num">' + r.sd.toFixed(2) + '</td><td class="num">' + f2(r.rg) + '</td><td class="num">' + f2(r.bg) + "</td></tr>";
     }).join("");
     $("copy").disabled = $("clear").disabled = rows.length === 0;
   }
@@ -348,6 +387,8 @@
       if (audioCtx.state === "suspended") await audioCtx.resume();
     } catch (e) { audioCtx = null; }
 
+    $("blackout").hidden = false;
+
     // Conto alla rovescia
     for (var s = secs; s > 0; s--) {
       status.textContent = "Misura tra " + s + " s… appoggia l'iPhone al monitor";
@@ -374,18 +415,51 @@
       var sd = Math.sqrt(v / (data.length * 3));
       rows.push({ label: label, r: m[0], g: m[1], b: m[2], sd: sd });
       renderLog();
-      $("label").value = "";
+      $("label").value = nextLabel(label);
       beep(880, 0.1); beep(880, 0.1, 0.18);
       status.className = "ok";
       status.textContent = "Registrato: «" + label + "» (" + data.length + " frame).";
     }
+    $("blackout").hidden = true;
     btn.disabled = false;
+    busy = false;
+  });
+  $("wblock").addEventListener("click", async function () {
+    if (!track || busy) return;
+    busy = true;
+    var btn = $("wblock"), status = $("snapStatus");
+    btn.disabled = true; $("snap").disabled = true;
+    var secs = parseInt($("delay").value, 10);
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+    } catch (e) { audioCtx = null; }
+    $("blackout").hidden = false;
+    for (var s = secs; s > 0; s--) {
+      status.textContent = "Blocco bilanciamento tra " + s + " s… appoggia l'iPhone sul bianco";
+      beep(660, 0.12);
+      await sleep(1000);
+    }
+    status.textContent = "Bilanciamento in corso…";
+    beep(990, 0.45);
+    var ok = true;
+    try { await track.applyConstraints({ advanced: [{ whiteBalanceMode: "continuous" }] }); } catch (e) { ok = false; }
+    await sleep(2500);
+    try { await track.applyConstraints({ advanced: [{ whiteBalanceMode: "manual" }] }); } catch (e) { ok = false; }
+    await sleep(500);
+    beep(880, 0.1); beep(880, 0.1, 0.18);
+    $("blackout").hidden = true;
+    status.className = ok ? "ok" : "no";
+    status.textContent = ok ? "Bilanciamento del bianco bloccato sul bianco del monitor." : "Il blocco non è andato a buon fine: riprova.";
+    renderCaps();
+    btn.disabled = false; $("snap").disabled = false;
     busy = false;
   });
   $("clear").addEventListener("click", function () { rows = []; renderLog(); });
   $("copy").addEventListener("click", async function () {
-    var csv = "etichetta,R,G,B,sigma\n" + rows.map(function (r) {
-      return '"' + r.label.replace(/"/g, '""') + '",' + [r.r, r.g, r.b, r.sd].map(function (v) { return v.toFixed(2); }).join(",");
+    var csv = "etichetta,R,G,B,sigma,R/G rel,B/G rel\n" + derive().map(function (r) {
+      return '"' + r.label.replace(/"/g, '""') + '",' + [r.r, r.g, r.b, r.sd].map(function (v) { return v.toFixed(2); }).join(",") +
+        "," + (r.rg === null ? "" : r.rg.toFixed(3)) + "," + (r.bg === null ? "" : r.bg.toFixed(3));
     }).join("\n");
     try { await navigator.clipboard.writeText(csv); setMsg("CSV copiato negli appunti.", "ok"); }
     catch (e) { setMsg("Copia non riuscita: seleziona e copia la tabella a mano.", "no"); }
