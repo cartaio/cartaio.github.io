@@ -115,8 +115,21 @@
   </p>
   <div class="row">
     <input id="label" type="text" placeholder="Etichetta (es. grigio 50%)" aria-label="Etichetta">
-    <button id="snap" disabled>Registra</button>
   </div>
+  <div class="row" style="margin-top:8px">
+    <label for="delay" style="margin:0">Ritardo</label>
+    <select id="delay" style="font:inherit;padding:8px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text)">
+      <option value="3">3 s</option>
+      <option value="5" selected>5 s</option>
+      <option value="8">8 s</option>
+      <option value="12">12 s</option>
+    </select>
+    <button id="snap" class="primary" disabled>Registra con ritardo</button>
+  </div>
+  <p class="muted" style="margin:8px 0 0;font-size:.9rem">
+    Dopo il tap senti un bip al secondo, poi un bip lungo quando parte la misura (1 secondo di media). Un bip doppio conferma che la misura è registrata. Alza il volume e non attivare il silenzioso.
+  </p>
+  <p id="snapStatus" class="warn" style="margin:8px 0 0;min-height:1.4em"></p>
   <div class="scroll" style="margin-top:10px">
     <table>
       <thead><tr><th>Etichetta</th><th>R</th><th>G</th><th>B</th><th>σ</th></tr></thead>
@@ -159,6 +172,7 @@
     video.srcObject = stream;
     try { await video.play(); } catch (e) {}
     running = true;
+    try { if (navigator.wakeLock) navigator.wakeLock.request("screen").catch(function () {}); } catch (e) {}
     setMsg("Fotocamera attiva: " + (track.label || "frontale"), "ok");
     $("start").disabled = true; $("stop").disabled = false; $("lock").disabled = false; $("snap").disabled = false;
     renderCaps();
@@ -269,6 +283,7 @@
       r /= n; g /= n; b /= n;
       lastReading = { r: r, g: g, b: b };
       hist.push([r, g, b]); if (hist.length > 30) hist.shift();
+      if (collecting) collecting.push([r, g, b]);
       frames++;
     }
     var now = performance.now();
@@ -304,12 +319,68 @@
     }).join("");
     $("copy").disabled = $("clear").disabled = rows.length === 0;
   }
-  $("snap").addEventListener("click", function () {
-    if (!lastReading) return;
+  var audioCtx = null, collecting = null, busy = false;
+
+  function beep(freq, dur, when) {
+    if (!audioCtx) return;
+    var t = audioCtx.currentTime + (when || 0);
+    var o = audioCtx.createOscillator(), g = audioCtx.createGain();
+    o.frequency.value = freq; o.type = "sine";
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.5, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(audioCtx.destination);
+    o.start(t); o.stop(t + dur + 0.02);
+  }
+  function sleep(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  $("snap").addEventListener("click", async function () {
+    if (!lastReading || busy) return;
+    busy = true;
+    var btn = $("snap"), status = $("snapStatus");
+    btn.disabled = true;
     var label = $("label").value.trim() || ("misura " + (rows.length + 1));
-    rows.push({ label: label, r: lastReading.r, g: lastReading.g, b: lastReading.b, sd: stdev() });
-    $("label").value = "";
-    renderLog();
+    var secs = parseInt($("delay").value, 10);
+
+    // L'audio va creato dentro il gesto dell'utente
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") await audioCtx.resume();
+    } catch (e) { audioCtx = null; }
+
+    // Conto alla rovescia
+    for (var s = secs; s > 0; s--) {
+      status.textContent = "Misura tra " + s + " s… appoggia l'iPhone al monitor";
+      beep(660, 0.12);
+      await sleep(1000);
+    }
+
+    // Raccolta di 1 secondo di frame
+    status.textContent = "Misura in corso…";
+    beep(990, 0.45);
+    collecting = [];
+    await sleep(1000);
+    var data = collecting; collecting = null;
+
+    if (data.length === 0) {
+      status.textContent = "Nessun frame letto. Riprova.";
+      status.className = "no";
+    } else {
+      var m = [0, 0, 0], k;
+      data.forEach(function (h) { for (k = 0; k < 3; k++) m[k] += h[k]; });
+      for (k = 0; k < 3; k++) m[k] /= data.length;
+      var v = 0;
+      data.forEach(function (h) { for (k = 0; k < 3; k++) v += Math.pow(h[k] - m[k], 2); });
+      var sd = Math.sqrt(v / (data.length * 3));
+      rows.push({ label: label, r: m[0], g: m[1], b: m[2], sd: sd });
+      renderLog();
+      $("label").value = "";
+      beep(880, 0.1); beep(880, 0.1, 0.18);
+      status.className = "ok";
+      status.textContent = "Registrato: «" + label + "» (" + data.length + " frame).";
+    }
+    btn.disabled = false;
+    busy = false;
   });
   $("clear").addEventListener("click", function () { rows = []; renderLog(); });
   $("copy").addEventListener("click", async function () {
