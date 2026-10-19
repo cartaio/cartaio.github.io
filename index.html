@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Test fotocamera frontale</title>
+<style>
+  :root {
+    --bg: #f4f4f2; --panel: #ffffff; --text: #1b1b1b; --muted: #666; --line: #d8d8d4;
+    --ok: #1a7f37; --no: #b3261e; --warn: #9a6700; --accent: #1f4fd8;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161616; --panel: #212121; --text: #ececec; --muted: #9a9a9a; --line: #383838;
+      --ok: #4ac26b; --no: #ff7b72; --warn: #e3b341; --accent: #7aa2ff; }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+    max-width: 720px; margin: 0 auto;
+  }
+  h1 { font-size: 1.35rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 10px; }
+  p.sub { margin: 0 0 16px; color: var(--muted); }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  button {
+    font: inherit; padding: 10px 14px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); cursor: pointer;
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-weight: 600; }
+  td.num { font-variant-numeric: tabular-nums; }
+  .ok { color: var(--ok); font-weight: 600; }
+  .no { color: var(--no); font-weight: 600; }
+  .warn { color: var(--warn); font-weight: 600; }
+  .muted { color: var(--muted); }
+  .scroll { overflow-x: auto; }
+  .stage { position: relative; width: 100%; max-width: 360px; aspect-ratio: 4 / 3; background: #000; border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+  .stage video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); display: block; }
+  .roi { position: absolute; left: 50%; top: 50%; border: 2px solid #fff; mix-blend-mode: difference; transform: translate(-50%, -50%); pointer-events: none; }
+  .read { display: flex; gap: 12px; align-items: center; margin: 8px 0; }
+  .swatch { width: 56px; height: 56px; border-radius: 8px; border: 1px solid var(--line); flex: none; }
+  .read .vals { font-variant-numeric: tabular-nums; font-size: 1.05rem; }
+  label { display: block; margin: 8px 0 4px; }
+  input[type=range] { width: 100%; }
+  input[type=text] { font: inherit; padding: 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); min-width: 0; flex: 1; }
+  pre { margin: 8px 0 0; padding: 10px; background: var(--bg); border-radius: 8px; overflow-x: auto; font-size: .8rem; max-height: 240px; }
+  #msg { margin: 8px 0 0; min-height: 1.4em; }
+</style>
+</head>
+<body>
+
+<h1>Test fotocamera frontale</h1>
+<p class="sub">Verifica cosa Safari ti lascia controllare e misura la media RGB di un'area centrale.</p>
+
+<section>
+  <h2>1. Avvio</h2>
+  <div class="row">
+    <button id="start" class="primary">Avvia fotocamera frontale</button>
+    <button id="stop" disabled>Ferma</button>
+  </div>
+  <p id="msg" class="muted"></p>
+</section>
+
+<section>
+  <h2>2. Controlli disponibili</h2>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Controllo</th><th>Supporto</th><th>Dettaglio</th></tr></thead>
+      <tbody id="capRows"><tr><td colspan="3" class="muted">Avvia la fotocamera per vedere i risultati.</td></tr></tbody>
+    </table>
+  </div>
+  <div class="row" style="margin-top:12px">
+    <button id="lock" disabled>Prova a bloccare esposizione, bilanciamento bianco e fuoco</button>
+  </div>
+  <div id="lockResult" style="margin-top:10px"></div>
+  <details style="margin-top:10px">
+    <summary class="muted">Dati grezzi (capabilities / settings)</summary>
+    <pre id="raw"></pre>
+  </details>
+</section>
+
+<section>
+  <h2>3. Lettura colore</h2>
+  <div class="stage">
+    <video id="video" playsinline muted autoplay></video>
+    <div class="roi" id="roiBox"></div>
+  </div>
+  <label for="roiSize">Dimensione area di misura: <span id="roiLabel">20</span>%</label>
+  <input id="roiSize" type="range" min="5" max="100" value="20">
+  <div class="read">
+    <div class="swatch" id="swatch"></div>
+    <div class="vals">
+      <div>R <b id="vr">–</b> &nbsp; G <b id="vg">–</b> &nbsp; B <b id="vb">–</b></div>
+      <div class="muted" style="font-size:.9rem">Instabilità (σ, ultimi 30 frame): <span id="sd">–</span></div>
+      <div class="muted" style="font-size:.9rem">Frame analizzati: <span id="fps">–</span> al secondo</div>
+    </div>
+  </div>
+  <canvas id="canvas" width="32" height="32" hidden></canvas>
+</section>
+
+<section>
+  <h2>4. Test dell'esposizione automatica</h2>
+  <p class="muted" style="margin-top:0">
+    Appoggia l'iPhone, con la fotocamera frontale a contatto, al centro dello schermo del PC che mostra
+    <b>patch.html</b>. Per ogni patch scrivi un'etichetta e premi «Registra». Se la fotocamera compensa
+    automaticamente, i valori di grigi diversi risulteranno quasi uguali tra loro.
+  </p>
+  <div class="row">
+    <input id="label" type="text" placeholder="Etichetta (es. grigio 50%)" aria-label="Etichetta">
+    <button id="snap" disabled>Registra</button>
+  </div>
+  <div class="scroll" style="margin-top:10px">
+    <table>
+      <thead><tr><th>Etichetta</th><th>R</th><th>G</th><th>B</th><th>σ</th></tr></thead>
+      <tbody id="log"></tbody>
+    </table>
+  </div>
+  <div class="row" style="margin-top:10px">
+    <button id="copy" disabled>Copia come CSV</button>
+    <button id="clear" disabled>Svuota</button>
+  </div>
+</section>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var video = $("video"), canvas = $("canvas"), ctx = canvas.getContext("2d", { willReadFrequently: true });
+  var stream = null, track = null, running = false;
+  var hist = [], lastReading = null, frames = 0, fpsStamp = performance.now();
+  var rows = [];
+
+  function setMsg(text, cls) { var m = $("msg"); m.textContent = text; m.className = cls || "muted"; }
+  function esc(s) { return String(s).replace(/[&<>]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]; }); }
+  function fmt(v) { return typeof v === "object" ? JSON.stringify(v) : String(v); }
+
+  /* ---------- Avvio / stop ---------- */
+  $("start").addEventListener("click", async function () {
+    if (!window.isSecureContext) { setMsg("Serve HTTPS: apri la pagina da GitHub Pages.", "no"); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { setMsg("getUserMedia non è disponibile in questo browser.", "no"); return; }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } }
+      });
+    } catch (e) {
+      setMsg("Accesso negato o fotocamera non disponibile: " + e.name + ". Controlla i permessi di Safari.", "no");
+      return;
+    }
+    track = stream.getVideoTracks()[0];
+    video.srcObject = stream;
+    try { await video.play(); } catch (e) {}
+    running = true;
+    setMsg("Fotocamera attiva: " + (track.label || "frontale"), "ok");
+    $("start").disabled = true; $("stop").disabled = false; $("lock").disabled = false; $("snap").disabled = false;
+    renderCaps();
+    requestAnimationFrame(loop);
+  });
+
+  $("stop").addEventListener("click", function () {
+    running = false;
+    if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+    video.srcObject = null; stream = null; track = null;
+    $("start").disabled = false; $("stop").disabled = true; $("lock").disabled = true; $("snap").disabled = true;
+    setMsg("Fotocamera ferma.");
+  });
+
+  /* ---------- Capabilities ---------- */
+  function getCaps() { try { return track.getCapabilities ? track.getCapabilities() : null; } catch (e) { return null; } }
+  function getSet() { try { return track.getSettings(); } catch (e) { return {}; } }
+
+  function renderCaps() {
+    var caps = getCaps(), set = getSet();
+    var supported = navigator.mediaDevices.getSupportedConstraints ? navigator.mediaDevices.getSupportedConstraints() : {};
+    var tbody = $("capRows");
+    var items = [
+      { k: "exposureMode", name: "Modalità esposizione", manual: "manual" },
+      { k: "exposureTime", name: "Tempo di esposizione" },
+      { k: "exposureCompensation", name: "Compensazione esposizione" },
+      { k: "iso", name: "ISO" },
+      { k: "whiteBalanceMode", name: "Modalità bilanciamento bianco", manual: "manual" },
+      { k: "colorTemperature", name: "Temperatura colore" },
+      { k: "focusMode", name: "Modalità fuoco", manual: "manual" },
+      { k: "focusDistance", name: "Distanza di fuoco" },
+      { k: "torch", name: "Torcia" },
+      { k: "zoom", name: "Zoom" }
+    ];
+    var html = "";
+    if (!caps) {
+      html += '<tr><td colspan="3" class="no">getCapabilities() non è disponibile: Safari non espone alcun controllo manuale.</td></tr>';
+    }
+    items.forEach(function (it) {
+      var inCaps = caps && (it.k in caps);
+      var detail = "", status;
+      if (inCaps) {
+        detail = "capabilities: " + fmt(caps[it.k]);
+        if (it.k in set) detail += "<br>attuale: " + esc(fmt(set[it.k]));
+        if (it.manual) {
+          var list = Array.isArray(caps[it.k]) ? caps[it.k] : [];
+          status = list.indexOf(it.manual) >= 0 ? '<span class="ok">manuale disponibile</span>' : '<span class="warn">solo automatico</span>';
+        } else {
+          status = '<span class="ok">esposto</span>';
+        }
+      } else {
+        status = '<span class="no">no</span>';
+        if (supported[it.k]) detail = "dichiarato dal browser ma non per questa fotocamera";
+      }
+      html += "<tr><td>" + it.name + "</td><td>" + status + "</td><td class=\"muted\">" + detail + "</td></tr>";
+    });
+    html += "<tr><td>Risoluzione</td><td class=\"num\">" + (set.width || "?") + "×" + (set.height || "?") + "</td><td class=\"muted\">" + (set.frameRate ? Math.round(set.frameRate) + " fps" : "") + "</td></tr>";
+    tbody.innerHTML = html;
+    $("raw").textContent = JSON.stringify({ supportedConstraints: supported, capabilities: caps, settings: set, userAgent: navigator.userAgent }, null, 2);
+  }
+
+  /* ---------- Tentativo di blocco ---------- */
+  $("lock").addEventListener("click", async function () {
+    if (!track) return;
+    var before = getSet();
+    var attempts = [
+      { name: "exposureMode = manual", c: { exposureMode: "manual" } },
+      { name: "whiteBalanceMode = manual", c: { whiteBalanceMode: "manual" } },
+      { name: "focusMode = manual", c: { focusMode: "manual" } },
+      { name: "exposureTime fisso", c: { exposureTime: before.exposureTime || 10 } },
+      { name: "iso fisso", c: { iso: before.iso || 100 } }
+    ];
+    var out = '<table><thead><tr><th>Tentativo</th><th>Esito</th></tr></thead><tbody>';
+    for (var i = 0; i < attempts.length; i++) {
+      var a = attempts[i], res;
+      try {
+        await track.applyConstraints({ advanced: [a.c] });
+        var after = getSet(), key = Object.keys(a.c)[0];
+        var applied = (key in after) && String(after[key]) === String(a.c[key]);
+        res = applied ? '<span class="ok">applicato</span>' : '<span class="warn">accettato ma senza effetto visibile (' + esc(key in after ? fmt(after[key]) : "impostazione non riportata") + ")</span>";
+      } catch (e) {
+        res = '<span class="no">rifiutato</span> <span class="muted">' + esc(e.name || "errore") + "</span>";
+      }
+      out += "<tr><td>" + a.name + "</td><td>" + res + "</td></tr>";
+    }
+    out += "</tbody></table>";
+    $("lockResult").innerHTML = out;
+    renderCaps();
+  });
+
+  /* ---------- Lettura ROI ---------- */
+  var roiPct = 20;
+  function updateRoi() {
+    roiPct = parseInt($("roiSize").value, 10);
+    $("roiLabel").textContent = roiPct;
+    var b = $("roiBox"); b.style.width = roiPct + "%"; b.style.height = roiPct + "%";
+  }
+  $("roiSize").addEventListener("input", updateRoi); updateRoi();
+
+  function loop() {
+    if (!running) return;
+    var vw = video.videoWidth, vh = video.videoHeight;
+    if (vw && vh && video.readyState >= 2) {
+      var sw = vw * roiPct / 100, sh = vh * roiPct / 100;
+      ctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, 32, 32);
+      var d = ctx.getImageData(0, 0, 32, 32).data, r = 0, g = 0, b = 0, n = d.length / 4;
+      for (var i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+      r /= n; g /= n; b /= n;
+      lastReading = { r: r, g: g, b: b };
+      hist.push([r, g, b]); if (hist.length > 30) hist.shift();
+      frames++;
+    }
+    var now = performance.now();
+    if (now - fpsStamp >= 500) {
+      if (lastReading) {
+        $("vr").textContent = lastReading.r.toFixed(1);
+        $("vg").textContent = lastReading.g.toFixed(1);
+        $("vb").textContent = lastReading.b.toFixed(1);
+        $("swatch").style.background = "rgb(" + Math.round(lastReading.r) + "," + Math.round(lastReading.g) + "," + Math.round(lastReading.b) + ")";
+        $("sd").textContent = stdev().toFixed(2);
+      }
+      $("fps").textContent = Math.round(frames * 1000 / (now - fpsStamp));
+      frames = 0; fpsStamp = now;
+    }
+    requestAnimationFrame(loop);
+  }
+
+  function stdev() {
+    if (hist.length < 2) return 0;
+    var m = [0, 0, 0], k, i;
+    hist.forEach(function (h) { for (k = 0; k < 3; k++) m[k] += h[k]; });
+    for (k = 0; k < 3; k++) m[k] /= hist.length;
+    var s = 0;
+    hist.forEach(function (h) { for (k = 0; k < 3; k++) s += Math.pow(h[k] - m[k], 2); });
+    return Math.sqrt(s / (hist.length * 3));
+  }
+
+  /* ---------- Registro misure ---------- */
+  function renderLog() {
+    $("log").innerHTML = rows.map(function (r) {
+      return "<tr><td>" + esc(r.label) + '</td><td class="num">' + r.r.toFixed(1) + '</td><td class="num">' + r.g.toFixed(1) +
+        '</td><td class="num">' + r.b.toFixed(1) + '</td><td class="num">' + r.sd.toFixed(2) + "</td></tr>";
+    }).join("");
+    $("copy").disabled = $("clear").disabled = rows.length === 0;
+  }
+  $("snap").addEventListener("click", function () {
+    if (!lastReading) return;
+    var label = $("label").value.trim() || ("misura " + (rows.length + 1));
+    rows.push({ label: label, r: lastReading.r, g: lastReading.g, b: lastReading.b, sd: stdev() });
+    $("label").value = "";
+    renderLog();
+  });
+  $("clear").addEventListener("click", function () { rows = []; renderLog(); });
+  $("copy").addEventListener("click", async function () {
+    var csv = "etichetta,R,G,B,sigma\n" + rows.map(function (r) {
+      return '"' + r.label.replace(/"/g, '""') + '",' + [r.r, r.g, r.b, r.sd].map(function (v) { return v.toFixed(2); }).join(",");
+    }).join("\n");
+    try { await navigator.clipboard.writeText(csv); setMsg("CSV copiato negli appunti.", "ok"); }
+    catch (e) { setMsg("Copia non riuscita: seleziona e copia la tabella a mano.", "no"); }
+  });
+
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden && running) requestAnimationFrame(loop);
+  });
+})();
+</script>
+</body>
+</html>
